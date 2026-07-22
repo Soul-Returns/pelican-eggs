@@ -1,0 +1,185 @@
+{
+    "_comment": "Pterodactyl-compatible export of the Palworld (Official Docker Image) egg. Importable into Pelican and Pterodactyl.",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-07-21T00:00:00+00:00",
+    "name": "Palworld (Official Docker Image)",
+    "author": "pascal.hannemann@gmail.com",
+    "description": "Palworld dedicated server installed from the OFFICIAL Docker image published by Pocketpair\n(ghcr.io/pocketpairjp/palserver). The install script fetches the official image's layers from\nthe GHCR registry and extracts the server files into the server volume; to update the server,\nsimply use the panel's \"Reinstall\" button - it fetches the official image again (version\nselectable via the Image Tag variable, default \"latest\") while preserving your world data\n(Pal/Saved). Server settings are managed through panel variables and\nPal/Saved/Config/LinuxServer/PalWorldSettings.ini.",
+    "features": [],
+    "docker_images": {
+        "Palworld Yolk (paltools)": "ghcr.io/soul-returns/yolks:palworld",
+        "SteamCMD Debian (no paltools)": "ghcr.io/parkervcp/steamcmd:debian"
+    },
+    "file_denylist": [
+        "PalServer.sh"
+    ],
+    "startup": "([ -x /opt/paltools/watcher.sh ] && /opt/paltools/watcher.sh > /dev/null 2>&1 &); ./PalworldServerConfigParser; (while read cmd; do rcon -s -a \"localhost:$RCON_PORT\" -p \"$ADMIN_PASSWORD\" \"$cmd\";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ \"${COMMUNITY_SERVER}\" == \"1\" ]; then echo \"-publiclobby\"; fi) $(if [ \"${PERF_THREADS}\" == \"1\" ]; then echo \"-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS\"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername=\"{{SERVER_NAME}}\" -players={{MAX_PLAYERS}} $(if [ -n \"$SERVER_PASSWORD\" ]; then echo \"-serverpassword=\\\"${SERVER_PASSWORD}\\\"\"; fi) -adminpassword=\"{{ADMIN_PASSWORD}}\" -rcon",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\": \"Setting breakpad minidump AppID = 2394010\"}",
+        "logs": "{}",
+        "stop": "shutdown 15"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Palworld installation from the OFFICIAL dedicated server Docker image\n# (ghcr.io/pocketpairjp/palserver) - WITHOUT running that image directly:\n# it declares ENTRYPOINT [\"/bin/sh\",\"/pal/Package/PalServer.sh\"] and Wings\n# passes the install entrypoint as docker Cmd, so using it as the install\n# container would boot the game instead of this script. Instead, the\n# image's layers are pulled straight from the GHCR registry and the\n# server files (/pal/Package) are extracted from them.\n#\n# Install container: ghcr.io/parkervcp/installers:debian (curl/jq/tar included)\n# Server Files:      /mnt/server\n#\n# UPDATING: use the panel's \"Reinstall\" button. It fetches the official\n# image again (tag from the IMAGE TAG variable, default \"latest\") while\n# preserving your world data and config (Pal/Saved).\n\nset -euo pipefail\n\nREGISTRY=ghcr.io\nREPO=pocketpairjp/palserver\nTAG=\"${OFFICIAL_IMAGE_TAG:-latest}\"\nACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'\n\necho \"Requesting anonymous pull token for ${REPO} ...\"\nTOKEN=$(curl -fsSL \"https://${REGISTRY}/token?scope=repository:${REPO}:pull\" | jq -r .token)\n\necho \"Resolving manifest for tag '${TAG}' ...\"\nMANIFEST=$(curl -fsSL -H \"Authorization: Bearer ${TOKEN}\" -H \"Accept: ${ACCEPT}\" \"https://${REGISTRY}/v2/${REPO}/manifests/${TAG}\")\n\n# Multi-arch index -> pick the linux/amd64 manifest\nif jq -e '.manifests' > /dev/null <<< \"${MANIFEST}\"; then\n    DIGEST=$(jq -r '[.manifests[] | select(.platform.os == \"linux\" and .platform.architecture == \"amd64\")][0].digest' <<< \"${MANIFEST}\")\n    MANIFEST=$(curl -fsSL -H \"Authorization: Bearer ${TOKEN}\" -H \"Accept: ${ACCEPT}\" \"https://${REGISTRY}/v2/${REPO}/manifests/${DIGEST}\")\nfi\n\nLAYERS=$(jq -r '.layers[].digest' <<< \"${MANIFEST}\")\nTOTAL_MB=$(jq -r '[.layers[].size] | add / 1048576 | floor' <<< \"${MANIFEST}\")\necho \"Image tag '${TAG}': $(wc -l <<< \"${LAYERS}\") layers, ~${TOTAL_MB} MB to download.\"\n\n# Preserve world data + config across reinstalls (kept on the same mount,\n# /tmp is a small tmpfs and saves can be large).\nif [ -d /mnt/server/Pal/Saved ]; then\n    echo \"Existing save data found - preserving Pal/Saved ...\"\n    rm -rf /mnt/server/.Saved_keep\n    mv /mnt/server/Pal/Saved /mnt/server/.Saved_keep\nfi\n\n# Extract /pal/Package from every layer, in order (later layers win).\n# Base OS layers simply contain no server files and are skipped.\nBLOB=/mnt/server/.layer.tmp\nfor digest in ${LAYERS}; do\n    LAYER_MB=$(jq -r --arg d \"${digest}\" '[.layers[] | select(.digest == $d).size][0] / 1048576 | floor' <<< \"${MANIFEST}\")\n    echo \"Downloading layer ${digest} (${LAYER_MB} MB) ...\"\n    rm -f \"${BLOB}\"\n    curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -C - -o \"${BLOB}\" -H \"Authorization: Bearer ${TOKEN}\" \"https://${REGISTRY}/v2/${REPO}/blobs/${digest}\" &\n    CURL_PID=$!\n    while kill -0 \"${CURL_PID}\" 2> /dev/null; do\n        sleep 2\n        if [ -f \"${BLOB}\" ] && kill -0 \"${CURL_PID}\" 2> /dev/null; then\n            echo \"  ... $(du -m \"${BLOB}\" | cut -f1) / ${LAYER_MB} MB downloaded\"\n        fi\n    done\n    wait \"${CURL_PID}\" || { echo \"ERROR: download of layer ${digest} failed.\"; exit 1; }\n    echo \"  download finished, extracting (the game data layer takes a few minutes) ...\"\n    tar -xzf \"${BLOB}\" -C /mnt/server --strip-components=2 --wildcards 'pal/Package/*' 2> /dev/null \\\n        && echo \"  -> server files extracted\" \\\n        || echo \"  -> no server files in this layer, skipped\"\n    rm -f \"${BLOB}\"\ndone\n\nif [ ! -f /mnt/server/Pal/Binaries/Linux/PalServer-Linux-Shipping ]; then\n    echo \"ERROR: PalServer-Linux-Shipping missing after extraction - installation failed.\"\n    exit 1\nfi\n\nif [ -d /mnt/server/.Saved_keep ]; then\n    rm -rf /mnt/server/Pal/Saved\n    mv /mnt/server/.Saved_keep /mnt/server/Pal/Saved\nfi\n\n# Steamworks SDK library where the server binary looks for it (HOME=/home/container at runtime)\nmkdir -p /mnt/server/.steam/sdk64\ncp -f /mnt/server/linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so\n\n# Seed the config file on first install\nif [ ! -f /mnt/server/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini ]; then\n    echo \"Creating PalWorldSettings.ini from defaults ...\"\n    mkdir -p /mnt/server/Pal/Saved/Config/LinuxServer\n    if [ -f /mnt/server/DefaultPalWorldSettings.ini ]; then\n        cp /mnt/server/DefaultPalWorldSettings.ini /mnt/server/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini\n    else\n        printf '[/Script/Pal.PalGameWorldSettings]\\nOptionSettings=()\\n' > /mnt/server/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini\n    fi\nfi\n\n# Config parser applies panel variables (RCON, description, crossplay, ...)\n# to PalWorldSettings.ini on every start.\ncd /mnt/server\necho \"Downloading PalworldServerConfigParser ...\"\ncurl -sSL -o PalworldServerConfigParser https://github.com/pelican-eggs/Palworld-Config-Parser-Tool/releases/latest/download/PalworldServerConfigParser-linux-amd64\nchmod +x PalworldServerConfigParser\n\nchmod +x /mnt/server/PalServer.sh /mnt/server/Pal/Binaries/Linux/PalServer-Linux-Shipping 2>/dev/null || true\n\necho \"-----------------------------------------\"\necho \"Installation completed (server files from the official image)\"\necho \"To update later: stop the server and press 'Reinstall' in the panel.\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/parkervcp/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Server Name",
+            "description": "The name of the server shown in the server browser. The characters \" ( ) are not allowed - they corrupt the config parser.",
+            "env_variable": "SERVER_NAME",
+            "default_value": "A Pelican hosted Palworld Server",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64|regex:/^[^\"()]*$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Description",
+            "description": "The description of the server. The characters \" ( ) are not allowed - they corrupt the config parser.",
+            "env_variable": "SERVER_DESCRIPTION",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128|regex:/^[^\"()]*$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Players",
+            "description": "Maximum number of players allowed on the server (1-32).",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "32",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric|between:1,32",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Password",
+            "description": "If specified, players must provide this password to join the server.",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|alpha_dash|between:1,30",
+            "field_type": "text"
+        },
+        {
+            "name": "Admin Password",
+            "description": "Password for administrator commands (in-game chat and RCON). Required - it is also used by\nthe panel console and the stop command, which are forwarded to the server via RCON.",
+            "env_variable": "ADMIN_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|alpha_dash|between:1,30",
+            "field_type": "text"
+        },
+        {
+            "name": "Community Server",
+            "description": "Set to 1 to register the server in the community server browser (-publiclobby). Leave at 0 for a private/invite (IP + port) server.",
+            "env_variable": "COMMUNITY_SERVER",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Public IP",
+            "description": "Set this to the server's public IP address. Only needed if the allocation is a local IP, otherwise the allocated IP is used automatically.",
+            "env_variable": "PUBLIC_IP",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Crossplay Platforms",
+            "description": "Comma-separated list of platforms allowed to connect. Valid values: Steam, Xbox, PS5, Mac.\nExample: Steam,Xbox,PS5,Mac",
+            "env_variable": "CROSSPLAY_PLATFORMS",
+            "default_value": "Steam,Xbox,PS5,Mac",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "RCON Port",
+            "description": "Internal RCON port used by the panel console. Does not need to be allocated.",
+            "env_variable": "RCON_PORT",
+            "default_value": "25575",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|numeric",
+            "field_type": "text"
+        },
+        {
+            "name": "Enable RCON",
+            "description": "Must be True - the panel console and stop command depend on it.",
+            "env_variable": "RCON_ENABLE",
+            "default_value": "True",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:True",
+            "field_type": "text"
+        },
+        {
+            "name": "Performance Threading Flags",
+            "description": "Set to 1 to add the legacy -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS flags.\nThe official docs state these may be unnecessary or even harmful on v1.0+ — leave at 0 unless\ntesting shows they help on your hardware.",
+            "env_variable": "PERF_THREADS",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Image Tag (Server Version)",
+            "description": "Tag of the official Docker image (ghcr.io/pocketpairjp/palserver) to install from, e.g.\n\"latest\" or \"v1.0.1.100619\". Applied when the server is (re)installed.",
+            "env_variable": "OFFICIAL_IMAGE_TAG",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Update (SteamCMD)",
+            "description": "Keep at 0. This egg updates through the official Docker image via the Reinstall button, not SteamCMD.",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "0",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Enable REST API",
+            "description": "Enables the official HTTP REST API (players, kick/ban, metrics, announce) used by the panel's Palworld Admin plugin. Applied to PalWorldSettings.ini by the config parser on every start. The REST API port must be allocated to the server and should be firewalled to the panel host only - it must NEVER be reachable from the public internet.",
+            "env_variable": "REST_API_ENABLED",
+            "default_value": "True",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:True,False",
+            "field_type": "text"
+        },
+        {
+            "name": "REST API Port",
+            "description": "Port for the official REST API. Needs a matching allocation on the server (TCP). Used by the Palworld Admin panel plugin.",
+            "env_variable": "REST_API_PORT",
+            "default_value": "8212",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|numeric",
+            "field_type": "text"
+        }
+    ]
+}

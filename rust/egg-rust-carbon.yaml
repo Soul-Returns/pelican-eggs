@@ -1,0 +1,291 @@
+_comment: 'Rust egg with Carbon modding framework support for Pelican Panel'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-07-22T00:00:00+00:00'
+name: 'Rust (Carbon)'
+author: pascal.hannemann@gmail.com
+uuid: d9e2233e-b3a8-4034-ac46-2367deaa4e1d
+description: |-
+  Rust dedicated server with the Carbon modding framework. Carbon is a lightweight, self-updating,
+  Harmony-based mod loader for Rust, fully compatible with Oxide plugins. The latest Carbon production
+  build is downloaded automatically on every server start. The framework can be switched to oxide or
+  vanilla via the Modding Framework variable.
+tags:
+  - source
+  - steamcmd
+  - carbon
+features:
+  - steam_disk_space
+docker_images:
+  Rust: 'ghcr.io/pelican-eggs/games:rust'
+file_denylist: {  }
+startup_commands:
+  Default: './RustDedicated -batchmode +server.port {{SERVER_PORT}} +server.queryport {{QUERY_PORT}} +server.identity "rust" +rcon.port {{RCON_PORT}} +rcon.web true +server.hostname \"{{SERVER_HOSTNAME}}\" +server.level \"{{LEVEL}}\" +server.description \"{{DESCRIPTION}}\" +server.url \"{{SERVER_URL}}\" +server.headerimage \"{{SERVER_IMG}}\" +server.logoimage \"{{SERVER_LOGO}}\" +server.maxplayers {{MAX_PLAYERS}} +rcon.password \"{{RCON_PASS}}\" +server.saveinterval {{SAVEINTERVAL}} +app.port {{APP_PORT}}  $( [ -z ${MAP_URL} ] && printf %s "+server.worldsize \"{{WORLD_SIZE}}\" +server.seed \"{{WORLD_SEED}}\"" || printf %s "+server.levelurl {{MAP_URL}}" ) {{ADDITIONAL_ARGS}}'
+config:
+  files: {  }
+  startup:
+    done: 'Server startup complete'
+  logs: {  }
+  stop: quit
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # steamcmd Base Installation Script
+      #
+      # Server Files: /mnt/server
+
+
+      ## just in case someone removed the defaults.
+      if [ "${STEAM_USER}" == "" ]; then
+          echo -e "steam user is not set.
+      "
+          echo -e "Using anonymous user.
+      "
+          STEAM_USER=anonymous
+          STEAM_PASS=""
+          STEAM_AUTH=""
+      else
+          echo -e "user set to ${STEAM_USER}"
+      fi
+
+      ## download and install steamcmd
+      cd /tmp
+      mkdir -p /mnt/server/steamcmd
+      curl -sSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+      tar -xzvf steamcmd.tar.gz -C /mnt/server/steamcmd
+      mkdir -p /mnt/server/steamapps # Fix steamcmd disk write error when this folder is missing
+      cd /mnt/server/steamcmd
+
+      # SteamCMD fails otherwise for some reason, even running as root.
+      # This is changed at the end of the install process anyways.
+      chown -R root:root /mnt
+      export HOME=/mnt/server
+
+      ## install game using steamcmd
+      ./steamcmd.sh +force_install_dir /mnt/server +login ${STEAM_USER} ${STEAM_PASS} ${STEAM_AUTH} +app_update ${SRCDS_APPID} ${EXTRA_FLAGS} validate +quit ## other flags may be needed depending on install. looking at you cs 1.6
+
+      ## set up 32 bit libraries
+      mkdir -p /mnt/server/.steam/sdk32
+      cp -v linux32/steamclient.so ../.steam/sdk32/steamclient.so
+
+      ## set up 64 bit libraries
+      mkdir -p /mnt/server/.steam/sdk64
+      cp -v linux64/steamclient.so ../.steam/sdk64/steamclient.so
+
+      ## pre-install Carbon so plugins can be uploaded before first boot
+      ## (the docker image entrypoint re-downloads the latest build on every start)
+      if [ "${FRAMEWORK}" == "carbon" ]; then
+          echo "Installing Carbon (production build)..."
+          cd /mnt/server
+          curl -sSL "https://github.com/CarbonCommunity/Carbon/releases/download/production_build/Carbon.Linux.Release.tar.gz" | tar zx
+          echo "Carbon installed."
+      fi
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    name: 'Server Name'
+    description: 'The name of your server in the public server list.'
+    env_variable: SERVER_HOSTNAME
+    default_value: 'A Rust Server'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:60'
+    sort: 1
+  -
+    name: 'Modding Framework'
+    description: "The modding framework to be used: carbon, oxide, vanilla.\r\nCarbon is downloaded/updated automatically on every server start."
+    env_variable: FRAMEWORK
+    default_value: carbon
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'in:vanilla,oxide,carbon'
+    sort: 2
+  -
+    name: Level
+    description: 'The world file for Rust to use.'
+    env_variable: LEVEL
+    default_value: 'Procedural Map'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:20'
+    sort: 3
+  -
+    name: Description
+    description: 'The description under your server title. Commonly used for rules & info. Use \n for newlines.'
+    env_variable: DESCRIPTION
+    default_value: 'Powered by Carbon'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+    sort: 4
+  -
+    name: URL
+    description: 'The URL for your server. This is what comes up when clicking the "Visit Website" button.'
+    env_variable: SERVER_URL
+    default_value: 'http://example.com'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - url
+    sort: 5
+  -
+    name: 'World Size'
+    description: 'The world size for a procedural map.'
+    env_variable: WORLD_SIZE
+    default_value: 3000
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+    sort: 6
+  -
+    name: 'World Seed'
+    description: 'The seed for a procedural map.'
+    env_variable: WORLD_SEED
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+    sort: 7
+  -
+    name: 'Max Players'
+    description: 'The maximum amount of players allowed in the server at once.'
+    env_variable: MAX_PLAYERS
+    default_value: 40
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+    sort: 8
+  -
+    name: 'Server Image'
+    description: 'The header image for the top of your server listing.'
+    env_variable: SERVER_IMG
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - url
+    sort: 9
+  -
+    name: 'Query Port'
+    description: "Server Query Port. Can't be the same as Game's primary port."
+    env_variable: QUERY_PORT
+    default_value: 27017
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - integer
+    sort: 10
+  -
+    name: 'RCON Port'
+    description: 'Port for RCON connections.'
+    env_variable: RCON_PORT
+    default_value: 28016
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - integer
+    sort: 11
+  -
+    name: 'RCON Password'
+    description: 'RCON access password.'
+    env_variable: RCON_PASS
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[\w.-]*$/'
+      - 'max:64'
+    sort: 12
+  -
+    name: 'Save Interval'
+    description: 'Sets the server’s auto-save interval in seconds.'
+    env_variable: SAVEINTERVAL
+    default_value: 60
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+    sort: 13
+  -
+    name: 'Additional Arguments'
+    description: 'Add additional startup parameters to the server.'
+    env_variable: ADDITIONAL_ARGS
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+    sort: 14
+  -
+    name: 'App Port'
+    description: 'Port for the Rust+ App. -1 to disable.'
+    env_variable: APP_PORT
+    default_value: 28082
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - integer
+    sort: 15
+  -
+    name: 'Server Logo'
+    description: 'The circular server logo for the Rust+ app.'
+    env_variable: SERVER_LOGO
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - url
+    sort: 16
+  -
+    name: 'Custom Map URL'
+    description: |-
+      Overwrites the map with the one from the direct download URL. Invalid URLs will cause the server to
+      crash.
+    env_variable: MAP_URL
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - url
+    sort: 17
+  -
+    name: 'App ID'
+    description: ''
+    env_variable: SRCDS_APPID
+    default_value: 258550
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - string
+      - 'in:258550'
+    sort: 18
