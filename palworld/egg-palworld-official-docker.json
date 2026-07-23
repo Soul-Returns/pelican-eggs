@@ -2,10 +2,10 @@
     "_comment": "Pterodactyl-compatible export of the Palworld (Official Docker Image) egg. Importable into Pelican and Pterodactyl.",
     "meta": {
         "version": "PTDL_v2",
-        "update_url": null
+        "update_url": "https://raw.githubusercontent.com/Soul-Returns/pelican-eggs/main/palworld/egg-palworld-official-docker.json"
     },
     "exported_at": "2026-07-23T00:00:00+00:00",
-    "name": "Palworld (Official Docker Image)",
+    "name": "Palworld (SoulHosting) v10",
     "author": "pascal.hannemann@gmail.com",
     "description": "Palworld dedicated server installed from the OFFICIAL Docker image published by Pocketpair\n(ghcr.io/pocketpairjp/palserver). The install script fetches the official image's layers from\nthe GHCR registry and extracts the server files into the server volume; to update the server,\nsimply use the panel's \"Reinstall\" button - it fetches the official image again (version\nselectable via the Image Tag variable, default \"latest\") while preserving your world data\n(Pal/Saved). Server settings are managed through panel variables and\nPal/Saved/Config/LinuxServer/PalWorldSettings.ini.",
     "features": [],

@@ -1,8 +1,8 @@
 meta:
   version: PLCN_v3
-  update_url: null
+  update_url: 'https://raw.githubusercontent.com/Soul-Returns/pelican-eggs/main/palworld/egg-palworld-official-docker.yaml'
 exported_at: '2026-07-23T00:00:00+00:00'
-name: 'Palworld (Official Docker Image)'
+name: 'Palworld (SoulHosting) v10'
 author: pascal.hannemann@gmail.com
 uuid: c2b6c230-d338-4003-882f-3a1698050e16
 description: |-
