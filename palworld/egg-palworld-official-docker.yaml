@@ -1,7 +1,7 @@
 meta:
   version: PLCN_v3
   update_url: null
-exported_at: '2026-07-22T00:00:00+00:00'
+exported_at: '2026-07-23T00:00:00+00:00'
 name: 'Palworld (Official Docker Image)'
 author: pascal.hannemann@gmail.com
 uuid: c2b6c230-d338-4003-882f-3a1698050e16
@@ -20,11 +20,10 @@ tags:
 features: []
 docker_images:
   'Palworld Yolk (paltools)': 'ghcr.io/soul-returns/yolks:palworld'
-  'SteamCMD Debian (no paltools)': 'ghcr.io/parkervcp/steamcmd:debian'
 file_denylist:
   - PalServer.sh
 startup_commands:
-  Default: '([ -x /opt/paltools/watcher.sh ] && /opt/paltools/watcher.sh > /dev/null 2>&1 &); ./PalworldServerConfigParser; (while read cmd; do rcon -s -a "localhost:$RCON_PORT" -p "$ADMIN_PASSWORD" "$cmd";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ "${COMMUNITY_SERVER}" == "1" ]; then echo "-publiclobby"; fi) $(if [ "${PERF_THREADS}" == "1" ]; then echo "-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername="{{SERVER_NAME}}" -players={{MAX_PLAYERS}} $(if [ -n "$SERVER_PASSWORD" ]; then echo "-serverpassword=\"${SERVER_PASSWORD}\""; fi) -adminpassword="{{ADMIN_PASSWORD}}" -rcon'
+  Default: '(/opt/paltools/watcher.sh > /dev/null 2>&1 &); ./PalworldServerConfigParser; (while read cmd; do rcon -s -a "localhost:$RCON_PORT" -p "$ADMIN_PASSWORD" "$cmd";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ "${COMMUNITY_SERVER}" == "1" ]; then echo "-publiclobby"; fi) $(if [ "${PERF_THREADS}" == "1" ]; then echo "-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername="{{SERVER_NAME}}" -players={{MAX_PLAYERS}} $(if [ -n "$SERVER_PASSWORD" ]; then echo "-serverpassword=\"${SERVER_PASSWORD}\""; fi) -adminpassword="{{ADMIN_PASSWORD}}" -rcon'
 config:
   files: {  }
   startup:
