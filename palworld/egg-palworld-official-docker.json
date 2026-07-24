@@ -5,17 +5,17 @@
         "update_url": "https://raw.githubusercontent.com/Soul-Returns/pelican-eggs/main/palworld/egg-palworld-official-docker.json"
     },
     "exported_at": "2026-07-23T00:00:00+00:00",
-    "name": "Palworld (SoulHosting) v10",
+    "name": "Palworld (SoulHosting) v11",
     "author": "pascal.hannemann@gmail.com",
     "description": "Palworld dedicated server installed from the OFFICIAL Docker image published by Pocketpair\n(ghcr.io/pocketpairjp/palserver). The install script fetches the official image's layers from\nthe GHCR registry and extracts the server files into the server volume; to update the server,\nsimply use the panel's \"Reinstall\" button - it fetches the official image again (version\nselectable via the Image Tag variable, default \"latest\") while preserving your world data\n(Pal/Saved). Server settings are managed through panel variables and\nPal/Saved/Config/LinuxServer/PalWorldSettings.ini.",
     "features": [],
     "docker_images": {
-        "Palworld Yolk (paltools)": "ghcr.io/soul-returns/yolks:palworld"
+        "Steamcmd (Debian)": "ghcr.io/parkervcp/steamcmd:debian"
     },
     "file_denylist": [
         "PalServer.sh"
     ],
-    "startup": "(/opt/paltools/watcher.sh > /dev/null 2>&1 &); ./PalworldServerConfigParser; (while read cmd; do rcon -s -a \"localhost:$RCON_PORT\" -p \"$ADMIN_PASSWORD\" \"$cmd\";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ \"${COMMUNITY_SERVER}\" == \"1\" ]; then echo \"-publiclobby\"; fi) $(if [ \"${PERF_THREADS}\" == \"1\" ]; then echo \"-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS\"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername=\"{{SERVER_NAME}}\" -players={{MAX_PLAYERS}} $(if [ -n \"$SERVER_PASSWORD\" ]; then echo \"-serverpassword=\\\"${SERVER_PASSWORD}\\\"\"; fi) -adminpassword=\"{{ADMIN_PASSWORD}}\" -rcon",
+    "startup": "./PalworldServerConfigParser; (while read cmd; do rcon -s -a \"localhost:$RCON_PORT\" -p \"$ADMIN_PASSWORD\" \"$cmd\";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ \"${COMMUNITY_SERVER}\" == \"1\" ]; then echo \"-publiclobby\"; fi) $(if [ \"${PERF_THREADS}\" == \"1\" ]; then echo \"-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS\"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername=\"{{SERVER_NAME}}\" -players={{MAX_PLAYERS}} $(if [ -n \"$SERVER_PASSWORD\" ]; then echo \"-serverpassword=\\\"${SERVER_PASSWORD}\\\"\"; fi) -adminpassword=\"{{ADMIN_PASSWORD}}\" -rcon",
     "config": {
         "files": "{}",
         "startup": "{\"done\": \"Setting breakpad minidump AppID = 2394010\"}",
