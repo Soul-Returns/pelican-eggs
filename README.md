@@ -13,15 +13,16 @@ servers keep their data).
 
 `palworld/egg-palworld-official-docker.yaml` — Palworld dedicated server
 installed from the **official Pocketpair Docker image** (layers pulled straight
-from GHCR and extracted; update = panel "Reinstall", world data preserved).
+from GHCR and extracted; world data preserved). Updates run automatically at
+startup while the "Auto Update" variable is on (digest check against the
+official image); panel "Reinstall" always force-refreshes.
 
 Highlights:
 
-- Runtime image: [`ghcr.io/soul-returns/yolks:palworld`](https://github.com/Soul-Returns/yolks)
-  — includes the *paltools* watcher used by the
+- Runtime image: stock `ghcr.io/parkervcp/steamcmd:debian` (rcon + steam libs);
+  no custom image needed — the
   [palworld-admin](https://github.com/Soul-Returns/pelican-plugin-palworld-admin)
-  panel plugin (filtered Pal exports). A plain steamcmd image is available as a
-  no-paltools fallback.
+  panel plugin (v1.6.0+) does its Pal exports in the browser.
 - Official REST API wired up (`REST_API_ENABLED` / `REST_API_PORT` variables,
   applied via the config parser; needs a TCP allocation for the port).
 - Hardened installer (HTTP/1.1 + retry/resume against GHCR stream resets,

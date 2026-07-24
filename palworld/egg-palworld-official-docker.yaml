@@ -2,16 +2,17 @@ meta:
   version: PLCN_v3
   update_url: 'https://raw.githubusercontent.com/Soul-Returns/pelican-eggs/main/palworld/egg-palworld-official-docker.yaml'
 exported_at: '2026-07-23T00:00:00+00:00'
-name: 'Palworld (SoulHosting) v11'
+name: 'Palworld (SoulHosting) v12'
 author: pascal.hannemann@gmail.com
 uuid: c2b6c230-d338-4003-882f-3a1698050e16
 description: |-
   Palworld dedicated server installed from the OFFICIAL Docker image published by Pocketpair
   (ghcr.io/pocketpairjp/palserver). The install script fetches the official image's layers from
   the GHCR registry and extracts the server files into the server volume; to update the server,
-  simply use the panel's "Reinstall" button - it fetches the official image again (version
-  selectable via the Image Tag variable, default "latest") while preserving your world data
-  (Pal/Saved). Server settings are managed through panel variables and
+  updates happen automatically at startup while the "Auto Update" variable is enabled (digest
+  check against the official image, version selectable via the Image Tag variable) - the
+  panel's "Reinstall" button always force-refreshes. World data (Pal/Saved) is preserved
+  either way. Server settings are managed through panel variables and
   Pal/Saved/Config/LinuxServer/PalWorldSettings.ini.
 icon: null
 tags:
@@ -23,7 +24,7 @@ docker_images:
 file_denylist:
   - PalServer.sh
 startup_commands:
-  Default: './PalworldServerConfigParser; (while read cmd; do rcon -s -a "localhost:$RCON_PORT" -p "$ADMIN_PASSWORD" "$cmd";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ "${COMMUNITY_SERVER}" == "1" ]; then echo "-publiclobby"; fi) $(if [ "${PERF_THREADS}" == "1" ]; then echo "-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername="{{SERVER_NAME}}" -players={{MAX_PLAYERS}} $(if [ -n "$SERVER_PASSWORD" ]; then echo "-serverpassword=\"${SERVER_PASSWORD}\""; fi) -adminpassword="{{ADMIN_PASSWORD}}" -rcon'
+  Default: 'if [ "${AUTO_UPDATE}" == "1" ] && [ -f ./update.sh ]; then bash ./update.sh || echo "[update] FAILED - starting the currently installed version"; fi; ./PalworldServerConfigParser; (while read cmd; do rcon -s -a "localhost:$RCON_PORT" -p "$ADMIN_PASSWORD" "$cmd";done) < /dev/stdin & /home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal $(if [ "${COMMUNITY_SERVER}" == "1" ]; then echo "-publiclobby"; fi) $(if [ "${PERF_THREADS}" == "1" ]; then echo "-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS"; fi) -port={{SERVER_PORT}} -publicport={{SERVER_PORT}} -servername="{{SERVER_NAME}}" -players={{MAX_PLAYERS}} $(if [ -n "$SERVER_PASSWORD" ]; then echo "-serverpassword=\"${SERVER_PASSWORD}\""; fi) -adminpassword="{{ADMIN_PASSWORD}}" -rcon'
 config:
   files: {  }
   startup:
@@ -45,47 +46,97 @@ scripts:
       # Install container: ghcr.io/parkervcp/installers:debian (curl/jq/tar included)
       # Server Files:      /mnt/server
       #
-      # UPDATING: use the panel's "Reinstall" button. It fetches the official
-      # image again (tag from the IMAGE TAG variable, default "latest") while
-      # preserving your world data and config (Pal/Saved).
+      # UPDATING: with the "Auto Update" variable on (default), the server
+      # checks the official image's digest at every startup and re-fetches the
+      # files when Pocketpair published a new version. The panel's "Reinstall"
+      # button remains the force-refresh hammer. World data (Pal/Saved) is
+      # preserved either way.
+      #
+      # The fetch/extract logic lives in update.sh, which this script writes
+      # into the server dir and then runs with FORCE=1 - install, reinstall
+      # and auto-update share the exact same code path.
 
       set -euo pipefail
 
+      cd /mnt/server
+
+      # update.sh needs jq at boot; the runtime image has none, so bundle a
+      # static build next to the server files.
+      echo "Fetching a static jq for update.sh ..."
+      mkdir -p .tools
+      curl -fsSL --retry 5 -o .tools/jq.tmp https://github.com/jqlang/jq/releases/latest/download/jq-linux-amd64
+      mv .tools/jq.tmp .tools/jq
+      chmod +x .tools/jq
+
+      cat > update.sh <<'UPDATE_EOF'
+      #!/bin/bash
+      # Palworld server files from the OFFICIAL Docker image
+      # (ghcr.io/pocketpairjp/palserver). Written by the egg install script;
+      # run by it with FORCE=1 (always downloads) and by the server startup
+      # when AUTO_UPDATE=1 (digest check first - a boot with no upstream
+      # change costs about a second). World data (Pal/Saved) is moved aside
+      # during extraction and restored by an EXIT trap even if a download
+      # dies halfway.
+
+      set -euo pipefail
+
+      DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      cd "${DIR}"
+      JQ="${DIR}/.tools/jq"
       REGISTRY=ghcr.io
       REPO=pocketpairjp/palserver
       TAG="${OFFICIAL_IMAGE_TAG:-latest}"
       ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+      DIGEST_FILE="${DIR}/.official-image.digest"
 
-      echo "Requesting anonymous pull token for ${REPO} ..."
-      TOKEN=$(curl -fsSL "https://${REGISTRY}/token?scope=repository:${REPO}:pull" | jq -r .token)
+      TOKEN=$(curl -fsSL "https://${REGISTRY}/token?scope=repository:${REPO}:pull" | "${JQ}" -r .token)
 
-      echo "Resolving manifest for tag '${TAG}' ..."
+      # The registry returns the tag's digest as a response header - that is
+      # the cheap freshness probe.
+      REMOTE_DIGEST=$(curl -fsSLI -H "Authorization: Bearer ${TOKEN}" -H "Accept: ${ACCEPT}" \
+          "https://${REGISTRY}/v2/${REPO}/manifests/${TAG}" | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" {print $2}')
+      [ -n "${REMOTE_DIGEST}" ] || { echo "[update] could not resolve digest for image tag '${TAG}'"; exit 1; }
+
+      if [ "${FORCE:-0}" != "1" ] && [ -f "${DIGEST_FILE}" ] && [ "$(cat "${DIGEST_FILE}")" == "${REMOTE_DIGEST}" ]; then
+          echo "[update] server files are up to date (image '${TAG}')"
+          exit 0
+      fi
+
+      echo "[update] fetching server files from image '${TAG}' ..."
       MANIFEST=$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: ${ACCEPT}" "https://${REGISTRY}/v2/${REPO}/manifests/${TAG}")
 
       # Multi-arch index -> pick the linux/amd64 manifest
-      if jq -e '.manifests' > /dev/null <<< "${MANIFEST}"; then
-          DIGEST=$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest' <<< "${MANIFEST}")
-          MANIFEST=$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: ${ACCEPT}" "https://${REGISTRY}/v2/${REPO}/manifests/${DIGEST}")
+      if "${JQ}" -e '.manifests' > /dev/null <<< "${MANIFEST}"; then
+          PLATFORM_DIGEST=$("${JQ}" -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest' <<< "${MANIFEST}")
+          MANIFEST=$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: ${ACCEPT}" "https://${REGISTRY}/v2/${REPO}/manifests/${PLATFORM_DIGEST}")
       fi
 
-      LAYERS=$(jq -r '.layers[].digest' <<< "${MANIFEST}")
-      TOTAL_MB=$(jq -r '[.layers[].size] | add / 1048576 | floor' <<< "${MANIFEST}")
-      echo "Image tag '${TAG}': $(wc -l <<< "${LAYERS}") layers, ~${TOTAL_MB} MB to download."
+      LAYERS=$("${JQ}" -r '.layers[].digest' <<< "${MANIFEST}")
+      TOTAL_MB=$("${JQ}" -r '[.layers[].size] | add / 1048576 | floor' <<< "${MANIFEST}")
+      echo "[update] $(wc -l <<< "${LAYERS}") layers, ~${TOTAL_MB} MB to download"
 
-      # Preserve world data + config across reinstalls (kept on the same mount,
-      # /tmp is a small tmpfs and saves can be large).
-      if [ -d /mnt/server/Pal/Saved ]; then
-          echo "Existing save data found - preserving Pal/Saved ..."
-          rm -rf /mnt/server/.Saved_keep
-          mv /mnt/server/Pal/Saved /mnt/server/.Saved_keep
+      # Preserve world data + config during extraction (kept on the same
+      # mount, /tmp is a small tmpfs and saves can be large). The EXIT trap
+      # also covers the normal path - restore happens exactly once, always.
+      restore_saved() {
+          if [ -d "${DIR}/.Saved_keep" ]; then
+              rm -rf "${DIR}/Pal/Saved"
+              mv "${DIR}/.Saved_keep" "${DIR}/Pal/Saved"
+          fi
+      }
+      trap restore_saved EXIT
+      if [ -d "${DIR}/Pal/Saved" ]; then
+          echo "[update] existing save data found - preserving Pal/Saved ..."
+          rm -rf "${DIR}/.Saved_keep"
+          mv "${DIR}/Pal/Saved" "${DIR}/.Saved_keep"
       fi
 
       # Extract /pal/Package from every layer, in order (later layers win).
       # Base OS layers simply contain no server files and are skipped.
-      BLOB=/mnt/server/.layer.tmp
+      BLOB="${DIR}/.layer.tmp"
       for digest in ${LAYERS}; do
-          LAYER_MB=$(jq -r --arg d "${digest}" '[.layers[] | select(.digest == $d).size][0] / 1048576 | floor' <<< "${MANIFEST}")
-          echo "Downloading layer ${digest} (${LAYER_MB} MB) ..."
+          LAYER_MB=$("${JQ}" -r --arg d "${digest}" '[.layers[] | select(.digest == $d).size][0] / 1048576 | floor' <<< "${MANIFEST}")
+          echo "[update] downloading layer ${digest} (${LAYER_MB} MB) ..."
           rm -f "${BLOB}"
           curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -C - -o "${BLOB}" -H "Authorization: Bearer ${TOKEN}" "https://${REGISTRY}/v2/${REPO}/blobs/${digest}" &
           CURL_PID=$!
@@ -95,27 +146,42 @@ scripts:
                   echo "  ... $(du -m "${BLOB}" | cut -f1) / ${LAYER_MB} MB downloaded"
               fi
           done
-          wait "${CURL_PID}" || { echo "ERROR: download of layer ${digest} failed."; exit 1; }
+          wait "${CURL_PID}" || { echo "[update] ERROR: download of layer ${digest} failed."; exit 1; }
           echo "  download finished, extracting (the game data layer takes a few minutes) ..."
-          tar -xzf "${BLOB}" -C /mnt/server --strip-components=2 --wildcards 'pal/Package/*' 2> /dev/null \
+          tar -xzf "${BLOB}" -C "${DIR}" --strip-components=2 --wildcards 'pal/Package/*' 2> /dev/null \
               && echo "  -> server files extracted" \
               || echo "  -> no server files in this layer, skipped"
           rm -f "${BLOB}"
       done
 
-      if [ ! -f /mnt/server/Pal/Binaries/Linux/PalServer-Linux-Shipping ]; then
-          echo "ERROR: PalServer-Linux-Shipping missing after extraction - installation failed."
+      if [ ! -f "${DIR}/Pal/Binaries/Linux/PalServer-Linux-Shipping" ]; then
+          echo "[update] ERROR: PalServer-Linux-Shipping missing after extraction."
           exit 1
       fi
 
-      if [ -d /mnt/server/.Saved_keep ]; then
-          rm -rf /mnt/server/Pal/Saved
-          mv /mnt/server/.Saved_keep /mnt/server/Pal/Saved
+      # Steamworks SDK library where the server binary looks for it (HOME=/home/container at runtime)
+      mkdir -p "${DIR}/.steam/sdk64"
+      cp -f "${DIR}/linux64/steamclient.so" "${DIR}/.steam/sdk64/steamclient.so"
+
+      # Config parser applies panel variables (RCON, description, crossplay, ...)
+      # to PalWorldSettings.ini on every start. Best effort: never clobber the
+      # working copy with a failed download.
+      echo "[update] refreshing PalworldServerConfigParser ..."
+      if curl -fsSL --retry 3 -o "${DIR}/.parser.tmp" https://github.com/pelican-eggs/Palworld-Config-Parser-Tool/releases/latest/download/PalworldServerConfigParser-linux-amd64; then
+          mv "${DIR}/.parser.tmp" "${DIR}/PalworldServerConfigParser"
+      else
+          rm -f "${DIR}/.parser.tmp"
+          echo "[update] parser download failed - keeping the current one"
       fi
 
-      # Steamworks SDK library where the server binary looks for it (HOME=/home/container at runtime)
-      mkdir -p /mnt/server/.steam/sdk64
-      cp -f /mnt/server/linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so
+      chmod +x "${DIR}/PalworldServerConfigParser" "${DIR}/PalServer.sh" "${DIR}/Pal/Binaries/Linux/PalServer-Linux-Shipping" 2> /dev/null || true
+
+      echo "${REMOTE_DIGEST}" > "${DIGEST_FILE}"
+      echo "[update] done - server files now match image '${TAG}'"
+      UPDATE_EOF
+      chmod +x update.sh
+
+      FORCE=1 bash ./update.sh
 
       # Seed the config file on first install
       if [ ! -f /mnt/server/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini ]; then
@@ -128,18 +194,10 @@ scripts:
           fi
       fi
 
-      # Config parser applies panel variables (RCON, description, crossplay, ...)
-      # to PalWorldSettings.ini on every start.
-      cd /mnt/server
-      echo "Downloading PalworldServerConfigParser ..."
-      curl -sSL -o PalworldServerConfigParser https://github.com/pelican-eggs/Palworld-Config-Parser-Tool/releases/latest/download/PalworldServerConfigParser-linux-amd64
-      chmod +x PalworldServerConfigParser
-
-      chmod +x /mnt/server/PalServer.sh /mnt/server/Pal/Binaries/Linux/PalServer-Linux-Shipping 2>/dev/null || true
-
       echo "-----------------------------------------"
       echo "Installation completed (server files from the official image)"
-      echo "To update later: stop the server and press 'Reinstall' in the panel."
+      echo "Updates: automatic at startup while 'Auto Update' is enabled;"
+      echo "'Reinstall' in the panel always force-refreshes."
       echo "-----------------------------------------"
     container: 'ghcr.io/parkervcp/installers:debian'
     entrypoint: bash
@@ -295,12 +353,16 @@ variables:
       - 'max:64'
     sort: 12
   -
-    name: 'Auto Update (SteamCMD)'
-    description: 'Keep at 0. This egg updates through the official Docker image via the Reinstall button, not SteamCMD.'
+    name: 'Auto Update'
+    description: |-
+      Update the server files from the official Docker image during startup whenever Pocketpair
+      publishes a new version (uses the Image Tag variable; the check costs about a second when
+      nothing changed). Disable to pin the currently installed version - the panel's Reinstall
+      button always force-updates. World data is preserved either way.
     env_variable: AUTO_UPDATE
-    default_value: 0
-    user_viewable: false
-    user_editable: false
+    default_value: 1
+    user_viewable: true
+    user_editable: true
     rules:
       - required
       - boolean
